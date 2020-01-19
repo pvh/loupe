@@ -21,32 +21,61 @@ def render(current_led):
     strip.show()
 
 ###
-current_led = 0
-def update(counter, pressed):
-    current_led = counter % 300
-    print('current', current_led)
-    render(current_led)
+def input_update(message, state):
+    state["current_led"] = (state["current_led"] + message["delta"]) % 300
+    return state
+
+def update():
+    state = { "current_led": 0 }
+    while True:
+        message = yield
+        
+        print(message)
+
+        switcher = {
+            "DialInput": input_update
+        }
+        transition = switcher.get(message["type"], lambda message, state: state)
+        state = transition(message, state)
+
+        print(state)
+        render(state["current_led"])
+###
+
+async def tick(update):
+    while True:
+        update.send({ "type": "Tick" })
+        await asyncio.sleep(0.1)
 
 ###
 
 import asyncio
 from evdev import InputDevice, categorize, ecodes
 
-dev = InputDevice('/dev/input/event0')
-
-async def helper(dev):
-    counter = 0
+async def listen_to_dial(updater):
+    dev = InputDevice('/dev/input/event0')
     pressed = False
     async for ev in dev.async_read_loop():
         if ev.type == ecodes.EV_REL and ev.code == ecodes.REL_DIAL:
-            counter = counter + ev.value
-            print('dial', counter)
-            update(counter, pressed)
+            delta = ev.value
+            print('turned', delta)
+            print(updater)
+            updater.send({"type": "DialInput", "delta": delta, "pressed": pressed})
         elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_0:
             pressed = (ev.value == 1)
             print('button', pressed)
-            update(counter, pressed)
+            updater.send({"type": "DialInput", "delta": 0, "pressed": pressed})
+
+###
         
-loop = asyncio.get_event_loop()
-loop.run_until_complete(helper(dev))
+async def main():
+    updater = update()
+    next(updater)
+    updater.send({"type": "Init"})
+
+    ticker = asyncio.create_task(tick(updater))
+    listener = asyncio.create_task(listen_to_dial(updater))
+    await listener
+
+asyncio.run(main())
 
