@@ -13,11 +13,18 @@ LED_STRIP = ws.SK6812_STRIP_RGBW
 strip = PixelStrip(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL, LED_STRIP)
 strip.begin()
 
+import math
 
-def render(current_led):
+def render(state):
     for i in range(strip.numPixels()):
         strip.setPixelColor(i, Color(12,34,0,0))
-    strip.setPixelColor(current_led, Color(255,255,255,255))
+
+    current_led = state["current_led"]
+
+    brightness = math.floor(math.sin(state["tick"]) * 128 + 128)
+    print('brightness', brightness)
+    strip.setPixelColor(current_led, Color(0, 0, 0, brightness))
+
     strip.show()
 
 ###
@@ -26,26 +33,29 @@ def input_update(message, state):
     return state
 
 def update():
-    state = { "current_led": 0 }
+    state = { "current_led": 0, "tick": 0 }
     while True:
         message = yield
         
         print(message)
 
         switcher = {
-            "DialInput": input_update
+            "DialInput": input_update,
+            "Tick": (lambda message, state: state.update({"tick": message["tick"]}) or state)
         }
         transition = switcher.get(message["type"], lambda message, state: state)
         state = transition(message, state)
 
         print(state)
-        render(state["current_led"])
+        render(state)
 ###
 
 async def tick(update):
+    tick = 0
     while True:
-        update.send({ "type": "Tick" })
-        await asyncio.sleep(0.1)
+        update.send({ "type": "Tick", "tick": tick })
+        tick = tick + 1
+        await asyncio.sleep(0.05)
 
 ###
 
