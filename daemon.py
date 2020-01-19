@@ -17,23 +17,71 @@ import math
 
 def render(state):
     for i in range(strip.numPixels()):
-        strip.setPixelColor(i, Color(12,34,0,0))
+        strip.setPixelColor(i, Color(0,0,0,0))
 
     current_led = state["current_led"]
+    new_region = state.get("new_region")
 
-    brightness = math.floor(math.sin(state["tick"]) * 128 + 128)
-    print('brightness', brightness)
-    strip.setPixelColor(current_led, Color(0, 0, 0, brightness))
+    regions = state.get("regions")
+    for r in regions:
+        extent = sorted((r[0], r[1]))
+        for p in range(*extent):
+            strip.setPixelColorRGB(p, *wheel(r[2]))
+
+    brightness = math.floor( (math.sin(state["tick"] * 0.375) + 1) * 32)
+
+    if new_region:
+        new_region_color = state.get("new_region_color", 0)
+        for p in range(*sorted(new_region)):
+            strip.setPixelColorRGB(p, *wheel(new_region_color), brightness)
+    
+    pixel = strip.getPixelColorRGB(current_led)
+    strip.setPixelColorRGB(current_led, pixel.r, pixel.g, pixel.b, brightness)
 
     strip.show()
 
 ###
+def wheel(pos):
+    """Generate rainbow colors across 0-255 positions."""
+    if pos < 85:
+        return (pos * 3, 255 - pos * 3, 0)
+    elif pos < 170:
+        pos -= 85
+        return (255 - pos * 3, 0, pos * 3)
+    else:
+        pos -= 170
+        return (0, pos * 3, 255 - pos * 3)
+
 def input_update(message, state):
-    state["current_led"] = (state["current_led"] + message["delta"]) % 300
+    if "new_region_color" in state:
+        delta = message.get("delta", 0)
+        pressed = message.get("pressed", False)
+        if delta != 0:
+            state["new_region_color"] = (state["new_region_color"] + message["delta"]) % 255
+        elif pressed:
+            state["regions"].append( (*state["new_region"], state["new_region_color"]) )
+            del state["new_region_color"]
+            del state["new_region"]
+    else:
+        if "delta" in message:
+            state["current_led"] = (state["current_led"] + message["delta"]) % 300
+
+        pressed = message.get("pressed", None)
+        if pressed == True and not "new_region" in state:
+            state["new_region"] = (state["current_led"], state["current_led"])
+        elif "new_region" in state:
+            if pressed == False: 
+                if state["new_region"][0] == state["new_region"][1]:
+                    del state["new_region"]
+                else:
+                    state["new_region_color"] = 0
+            else:
+                state["new_region"] = ( state["new_region"][0], state["current_led"] )
+
     return state
 
 def update():
-    state = { "current_led": 0, "tick": 0 }
+    state = { "current_led": 0, "tick": 0, "regions": [] }
     while True:
         message = yield
         
@@ -64,17 +112,15 @@ from evdev import InputDevice, categorize, ecodes
 
 async def listen_to_dial(updater):
     dev = InputDevice('/dev/input/event0')
-    pressed = False
     async for ev in dev.async_read_loop():
         if ev.type == ecodes.EV_REL and ev.code == ecodes.REL_DIAL:
             delta = ev.value
             print('turned', delta)
-            print(updater)
-            updater.send({"type": "DialInput", "delta": delta, "pressed": pressed})
+            updater.send({"type": "DialInput", "delta": delta})
         elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_0:
             pressed = (ev.value == 1)
             print('button', pressed)
-            updater.send({"type": "DialInput", "delta": 0, "pressed": pressed})
+            updater.send({"type": "DialInput", "pressed": pressed})
 
 ###
         
