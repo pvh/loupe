@@ -21,15 +21,20 @@ def render(state):
 
     current_led = state["current_led"]
     new_region = state.get("new_region")
+    current_region = state.get("current_region")
+
+    brightness = math.floor( (math.sin(state["tick"] * 0.375) + 1) * 8)
 
     regions = state.get("regions")
-    for r in regions:
+    for i, r in enumerate(regions):
         # range is non-inclusive of the high limit
         extent = sorted((r[0], r[1] + 1))
         for p in range(*extent):
-            strip.setPixelColorRGB(p, *wheel(r[2]))
+            if i == current_region:
+                strip.setPixelColorRGB(p, *wheel(r[2]), brightness)
+            else:
+                strip.setPixelColorRGB(p, *wheel(r[2]))
 
-    brightness = math.floor( (math.sin(state["tick"] * 0.375) + 1) * 8)
 
     if new_region:
         new_region_color = state.get("new_region_color", 0)
@@ -54,18 +59,6 @@ def wheel(pos):
     else:
         pos -= 170
         return (0, pos * 3, 255 - pos * 3)
-
-def coloring(message, state):
-    delta = message.get("delta", 0)
-    pressed = message.get("pressed", False)
-    if delta != 0:
-        state["new_region_color"] = (state["new_region_color"] + message["delta"]) % 255
-    elif pressed:
-        state["regions"].append( (*state["new_region"], state["new_region_color"]) )
-        del state["new_region_color"]
-        del state["new_region"]
-        state["task"] = "waiting"
-    return state
 
 def move_cursor(message, state):
     if "delta" in message:
@@ -96,6 +89,31 @@ def drawing(message, state):
         state["new_region"] = ( state["new_region"][0], state["current_led"] )
     return state
 
+def coloring(message, state):
+    delta = message.get("delta", 0)
+    pressed = message.get("pressed", False)
+    if delta != 0:
+        state["new_region_color"] = (state["new_region_color"] + message["delta"]) % 255
+    elif pressed:
+        state["regions"].append( (*state["new_region"], state["new_region_color"]) )
+        del state["new_region_color"]
+        del state["new_region"]
+        if len(state["regions"]) > 1:
+            state["current_region"] = 0
+            state["task"] = "picking"
+        else:
+            state["task"] = "waiting"
+    return state
+
+def picking(message, state):
+    delta = message.get("delta", 0)
+    pressed = message.get("pressed", False)
+
+    if pressed:
+        state["current_region"] = (state["current_region"] + 1) % len(state["regions"])
+        state["pressed_at"] = state["tick"]
+    return state
+
 def update():
     state = { "task": "waiting", "current_led": 0, "tick": 0, "regions": [] }
     while True:
@@ -111,6 +129,7 @@ def update():
             "waiting": waiting,
             "drawing": drawing,
             "coloring": coloring,
+            "picking": picking,
         }
 
         transition = state_machine.get(state["task"], lambda message, state: state)
