@@ -24,16 +24,19 @@ def render(state):
 
     regions = state.get("regions")
     for r in regions:
-        extent = sorted((r[0], r[1]))
+        # range is non-inclusive of the high limit
+        extent = sorted((r[0], r[1] + 1))
         for p in range(*extent):
             strip.setPixelColorRGB(p, *wheel(r[2]))
 
-    brightness = math.floor( (math.sin(state["tick"] * 0.375) + 1) * 32)
+    brightness = math.floor( (math.sin(state["tick"] * 0.375) + 1) * 8)
 
     if new_region:
         new_region_color = state.get("new_region_color", 0)
         for p in range(*sorted(new_region)):
-            strip.setPixelColorRGB(p, *wheel(new_region_color), brightness)
+            strip.setPixelColorRGB(p, *wheel(new_region_color), 0)
+        strip.setPixelColorRGB(new_region[0], *wheel(new_region_color), brightness)
+        strip.setPixelColorRGB(new_region[1], *wheel(new_region_color), brightness)
     
     pixel = strip.getPixelColorRGB(current_led)
     strip.setPixelColorRGB(current_led, pixel.r, pixel.g, pixel.b, brightness)
@@ -52,46 +55,65 @@ def wheel(pos):
         pos -= 170
         return (0, pos * 3, 255 - pos * 3)
 
-def input_update(message, state):
-    if "new_region_color" in state:
-        delta = message.get("delta", 0)
-        pressed = message.get("pressed", False)
-        if delta != 0:
-            state["new_region_color"] = (state["new_region_color"] + message["delta"]) % 255
-        elif pressed:
-            state["regions"].append( (*state["new_region"], state["new_region_color"]) )
-            del state["new_region_color"]
+def coloring(message, state):
+    delta = message.get("delta", 0)
+    pressed = message.get("pressed", False)
+    if delta != 0:
+        state["new_region_color"] = (state["new_region_color"] + message["delta"]) % 255
+    elif pressed:
+        state["regions"].append( (*state["new_region"], state["new_region_color"]) )
+        del state["new_region_color"]
+        del state["new_region"]
+        state["task"] = "waiting"
+    return state
+
+def move_cursor(message, state):
+    if "delta" in message:
+        state["current_led"] = (state["current_led"] + message["delta"]) % 300
+    return state
+
+def waiting(message, state):
+    state = move_cursor(message, state)
+
+    pressed = message.get("pressed", None)
+    if pressed == True:
+        state["task"] = "drawing"
+        state["new_region"] = (state["current_led"], state["current_led"])
+    return state
+    
+def drawing(message, state): 
+    state = move_cursor(message, state)
+
+    pressed = message.get("pressed", None)
+    if pressed == False: 
+        if state["new_region"][0] == state["new_region"][1]:
             del state["new_region"]
+            state["task"] = "waiting"
+        else:
+            state["task"] = "coloring"
+            state["new_region_color"] = 0
     else:
-        if "delta" in message:
-            state["current_led"] = (state["current_led"] + message["delta"]) % 300
-
-        pressed = message.get("pressed", None)
-        if pressed == True and not "new_region" in state:
-            state["new_region"] = (state["current_led"], state["current_led"])
-        elif "new_region" in state:
-            if pressed == False: 
-                if state["new_region"][0] == state["new_region"][1]:
-                    del state["new_region"]
-                else:
-                    state["new_region_color"] = 0
-            else:
-                state["new_region"] = ( state["new_region"][0], state["current_led"] )
-
+        state["new_region"] = ( state["new_region"][0], state["current_led"] )
     return state
 
 def update():
-    state = { "current_led": 0, "tick": 0, "regions": [] }
+    state = { "task": "waiting", "current_led": 0, "tick": 0, "regions": [] }
     while True:
         message = yield
         
         print(message)
 
-        switcher = {
-            "DialInput": input_update,
-            "Tick": (lambda message, state: state.update({"tick": message["tick"]}) or state)
+        # TODO: find a home for this
+        if (message["type"] == "tick"):
+            state["tick"] = message["tick"]
+
+        state_machine = {
+            "waiting": waiting,
+            "drawing": drawing,
+            "coloring": coloring,
         }
-        transition = switcher.get(message["type"], lambda message, state: state)
+
+        transition = state_machine.get(state["task"], lambda message, state: state)
         state = transition(message, state)
 
         print(state)
